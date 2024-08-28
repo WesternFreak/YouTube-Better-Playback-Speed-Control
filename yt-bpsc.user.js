@@ -23,7 +23,7 @@
   const defaultExtensionSettings = {
     rateIncreaseKey: 'NumpadAdd',
     rateDecreaseKey: 'NumpadSubtract',
-    rateResetKey: 'NumpadEnter'
+    rateResetKey: 'NumpadDecimal'
   }
 
   // Load settings
