@@ -13,7 +13,7 @@ BPSC allows you to have a better control over the speed of a video with customiz
 ## Installation
 
 1. Install a userscript manager (like [Violentmonkey](https://violentmonkey.github.io/get-it/))
-2. [Click here to install](#) the script.
+2. [Click here to install](https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control/raw/main/yt-bpsc.user.js) the script.
 
 ## How to Use
 
