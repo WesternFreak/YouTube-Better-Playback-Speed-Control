@@ -1,13 +1,13 @@
 ![](img/icon.png)
 # YouTube - Better Playback Speed Control
 
-BPSC allows you to have a better control over the speed of a video with customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
+BPSC is a userscript that allows a better control over the speed of a video with customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 
 ## Features
 
 - **Speed Override:** Increases maximum playback speed to 5x (up from YouTube's default 2x).
 
-- **Custom Shortcuts:** Configurable keyboard shortcuts.
+- **Custom Shortcuts:** Configurable keyboard shortcuts via menu.
 
 - **Time Remaining:** Shows the adjusted time to the end of the video at the current speed right in the video player.
 
@@ -20,7 +20,7 @@ BPSC allows you to have a better control over the speed of a video with customiz
 
 ## Installation
 
-1. Install a userscript manager (like [Violentmonkey](https://violentmonkey.github.io/get-it/))
+1. Install a userscript manager (like [Violentmonkey](https://violentmonkey.github.io/get-it/)).
 2. [Click here to install](https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control/raw/main/yt-bpsc.user.js) the script.
 
 ## How to Use
@@ -38,7 +38,7 @@ BPSC allows you to have a better control over the speed of a video with customiz
    
 ![](img/screenshot_1.png)
 
-1. Use the menu to setup your desired keyboard shortcuts:
+3. Use the menu to setup your desired keyboard shortcuts:
  
 ![](img/screenshot_2.png)
 
