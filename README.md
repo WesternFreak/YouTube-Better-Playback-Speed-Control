@@ -41,6 +41,3 @@ BPSC is a userscript that allows a better control over the speed of a video with
 3. Use the menu to setup your desired keyboard shortcuts:
  
 ![](img/screenshot_2.png)
-
-## Compatibility
-Tested with LibreOffice 129.0.2-1 and Violentmonkey 2.20.0
