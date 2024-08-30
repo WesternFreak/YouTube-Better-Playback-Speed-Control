@@ -7,7 +7,7 @@ BPSC is a userscript that allows a better control over the speed of a video with
 
 - **Speed Override:** Increases maximum playback speed to 5x (up from YouTube's default 2x).
 
-- **Custom Shortcuts:** Configurable keyboard shortcuts via menu.
+- **Custom Settings:** Configurable keyboard shortcuts and step change (0.25 by default) via menu.
 
 - **Time Remaining:** Shows the adjusted time to the end of the video at the current speed right in the video player.
 

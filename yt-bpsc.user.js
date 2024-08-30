@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube - Better Playback Speed Control
-// @version      1.0.0
+// @version      1.1.0
 // @namespace    https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control
 // @description  Customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 // @icon         https://raw.githubusercontent.com/WesternFreak/YouTube-Better-Playback-Speed-Control/main/img/icon.png
@@ -23,7 +23,8 @@
   const defaultExtensionSettings = {
     rateIncreaseKey: 'NumpadAdd',
     rateDecreaseKey: 'NumpadSubtract',
-    rateResetKey: 'NumpadDecimal'
+    rateResetKey: 'NumpadDecimal',
+    rateStep: 0.25
   }
 
   // Load settings
@@ -39,13 +40,13 @@
     rateResetKey: GM_getValue(
       'speedResetKey',
       defaultExtensionSettings.rateResetKey
-    )
+    ),
+    rateStep: GM_getValue('rateStep', defaultExtensionSettings.rateStep)
   })
 
   const PLAYBACK_RATE_DEFAULT = 1.0 // Default playback speed
   const MIN_PLAYBACK_RATE = 0.25 // Minimum allowed playback speed
   const MAX_PLAYBACK_RATE = 5.0 // Maximum allowed playback speed
-  const PLAYBACK_RATE_STEP = 0.25 // Playback speed step change
   const SYNC_THRESHOLD = 10 // Threshold in seconds for sync detection
 
   let storedExtensionSettings = getStoredSettings()
@@ -112,19 +113,21 @@
       zIndex: '1000'
     },
     bpscConfigInput: {
-      width: '100%',
+      // width: '100%',
       padding: '8px',
       boxSizing: 'border-box',
       border: '1px solid #555',
       borderRadius: '4px',
       flex: '2',
       marginRight: '10px',
+      width: '240px',
       backgroundColor: COLORS.backgroundSecondary,
       color: COLORS.textSecondary
     },
     bpscConfigInputLabel: {
-      display: 'block',
+      display: 'absolute',
       marginBottom: '5px',
+      width: '120px',
       color: COLORS.textPrimary
     },
     bpscConfigButton: {
@@ -200,17 +203,17 @@
 
     switch (action) {
       case 'reset':
-        newRate = 1.0
+        newRate = PLAYBACK_RATE_DEFAULT
         break
       case 'increase':
         newRate = Math.min(
-          currentPlaybackRate + PLAYBACK_RATE_STEP,
+          currentPlaybackRate + storedExtensionSettings.rateStep,
           MAX_PLAYBACK_RATE
         )
         break
       case 'decrease':
         newRate = Math.max(
-          currentPlaybackRate - PLAYBACK_RATE_STEP,
+          currentPlaybackRate - storedExtensionSettings.rateStep,
           MIN_PLAYBACK_RATE
         )
         break
@@ -395,12 +398,13 @@
 
     // config modal title
     const title = document.createElement('h2')
-    title.textContent = 'Better Playback Speed Control - Keybinds'
+    title.textContent = 'Better Playback Speed Control - Settings'
     Object.assign(title.style, STYLES.bpscConfigTitle)
     modalContent.appendChild(title)
 
     // create a label, input field, set button, and append them
-    const createInputContainer = (label, value, id) => {
+    // Add the input field for the playback rate step in the config menu
+    const createInputContainer = (label, value, id, isStep = false) => {
       const inputContainer = document.createElement('div')
       inputContainer.style.marginBottom = '15px'
       inputContainer.style.display = 'flex'
@@ -414,18 +418,20 @@
       inputText.type = 'text'
       inputText.value = value
       inputText.id = id
-      inputText.readOnly = true
+      inputText.readOnly = !isStep
       Object.assign(inputText.style, STYLES.bpscConfigInput)
-
-      const setButton = document.createElement('button')
-      setButton.textContent = 'Set'
-      Object.assign(setButton.style, STYLES.bpscConfigButtonSet)
-
-      setButton.addEventListener('click', () => setKeybind(id))
 
       inputContainer.appendChild(inputLabel)
       inputContainer.appendChild(inputText)
-      inputContainer.appendChild(setButton)
+
+      if (!isStep) {
+        const setButton = document.createElement('button')
+        setButton.textContent = 'Set'
+        Object.assign(setButton.style, STYLES.bpscConfigButtonSet)
+
+        setButton.addEventListener('click', () => setKeybind(id))
+        inputContainer.appendChild(setButton)
+      }
 
       return inputContainer
     }
@@ -450,6 +456,15 @@
         'Reset Speed Shortcut',
         storedExtensionSettings.rateResetKey,
         'resetKeyInput'
+      )
+    )
+
+    modalContent.appendChild(
+      createInputContainer(
+        'Playback Rate\nStep',
+        storedExtensionSettings.rateStep,
+        'rateStepInput',
+        true // editable input
       )
     )
 
@@ -497,18 +512,29 @@
       GM_setValue('speedIncreaseKey', newSettings.rateIncreaseKey)
       GM_setValue('speedDecreaseKey', newSettings.rateDecreaseKey)
       GM_setValue('speedResetKey', newSettings.rateResetKey)
+      GM_setValue('rateStep', newSettings.rateStep)
     }
 
-    // Function to save the settings and update the stored values
+    // Save Settings function with validation for playback rate step
     function saveSettings () {
       const newSettings = {
         rateIncreaseKey: document.getElementById('increaseKeyInput').value,
         rateDecreaseKey: document.getElementById('decreaseKeyInput').value,
-        rateResetKey: document.getElementById('resetKeyInput').value
+        rateResetKey: document.getElementById('resetKeyInput').value,
+        rateStep: parseFloat(document.getElementById('rateStepInput').value)
       }
 
-      // Check for conflicts
-      const keys = Object.values(newSettings)
+      // Validate the playback rate step
+      if (
+        isNaN(newSettings.rateStep) ||
+        newSettings.rateStep <= 0
+      ) {
+        alert('Error: Playback Rate Step must be a positive number.')
+        return
+      }
+
+      // Check for conflicts in keybinds
+      const keys = Object.values(newSettings).slice(0, 3)
       const hasConflicts = keys.some(
         (key, index) => keys.indexOf(key) !== index
       )
@@ -532,6 +558,8 @@
         defaultExtensionSettings.rateDecreaseKey
       document.getElementById('resetKeyInput').value =
         defaultExtensionSettings.rateResetKey
+      document.getElementById('rateStepInput').value =
+        defaultExtensionSettings.rateStep
     }
 
     // Function to set a keybind by detecting the next key press
