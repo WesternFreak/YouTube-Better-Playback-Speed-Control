@@ -31,13 +31,13 @@ BPSC is a userscript that allows a better control over the speed of a video with
 - Decrease playback speed: `Numpad -`
 - Reset playback speed: `Numpad .`
 
-### Customize Shortcuts
+### Change Settings
 
 1. Click the userscript manager icon in your browser.
-2. Locate the "YouTube - Better Playback Speed Control" in the menu then click "Customize Keybinds":
+2. Locate the "YouTube - Better Playback Speed Control" in the menu, then click "Settings":
    
 ![](img/screenshot_1.png)
 
-3. Use the menu to setup your desired keyboard shortcuts:
+3. Use the menu to setup your desired keyboard shortcuts and rate step:
  
 ![](img/screenshot_2.png)

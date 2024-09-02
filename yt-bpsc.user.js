@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube - Better Playback Speed Control
-// @version      1.1.0
+// @version      1.1.1
 // @namespace    https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control
 // @description  Customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 // @icon         https://raw.githubusercontent.com/WesternFreak/YouTube-Better-Playback-Speed-Control/main/img/icon.png
@@ -590,7 +590,7 @@
   }
 
   // Register the menu command for configuration
-  GM_registerMenuCommand('Customize Keybinds', createConfigMenu)
+  GM_registerMenuCommand('Settings', createConfigMenu)
 
   // MutationObserver to monitor DOM for video element or URL changes
   const observer = new MutationObserver(checkVideoExists)
