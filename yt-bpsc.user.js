@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube - Better Playback Speed Control
-// @version      1.1.1
+// @version      1.1.2
 // @namespace    https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control
 // @description  Customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 // @icon         https://raw.githubusercontent.com/WesternFreak/YouTube-Better-Playback-Speed-Control/main/img/icon.png
@@ -267,7 +267,7 @@
     )
     const videoTimeBehind = videoTimeMax - videoTimeNow
     const isLivestream = document.querySelector(
-      '.ytp-live-badge:not([disabled="true"])'
+      '.ytp-live-badge[aria-label], .ytp-live-badge[title]'
     )
     const playbackRateFormatted = getPlaybackRate().toFixed(2)
 
