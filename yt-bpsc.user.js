@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube - Better Playback Speed Control
-// @version      1.1.2
+// @version      1.1.4
 // @namespace    https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control
 // @description  Customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 // @icon         https://raw.githubusercontent.com/WesternFreak/YouTube-Better-Playback-Speed-Control/main/img/icon.png
@@ -69,7 +69,13 @@
     bpscTextDisplay: {
       display: 'inline-block',
       marginLeft: '10px',
-      color: COLORS.textPrimary
+      color: COLORS.textPrimary,
+      height: '24px', // Match YouTube's height
+      backgroundColor: 'rgba(0, 0, 0, 0.3)', // Match YouTube's background
+      borderRadius: '12px', // Match YouTube's rounded corners
+      padding: '0 8px', // Match YouTube's padding
+      fontSize: '14px', // Adjust font size for readability
+      lineHeight: '24px' // Vertically center text within the element
     },
     bpscConfigTitle: {
       color: COLORS.textPrimary,
@@ -282,6 +288,7 @@
 
   // Update text display - livestreams
   const updateLivestreamText = (timeBehindLive, playbackRateFormatted) => {
+    additionalText.style.display = 'none'
     let newText = ''
 
     if (timeBehindLive > SYNC_THRESHOLD) {
@@ -296,24 +303,27 @@
 
     if (newText) {
       newText += ')'
+      additionalText.style.display = 'inline-block'
+      additionalText.textContent = newText
+    } else {
+      additionalText.style.display = 'none'
     }
-
-    additionalText.textContent = newText
   }
 
   // Function to update the text on the screen for regular videos
   const updateVideoText = (timeToEnd, playbackRateFormatted) => {
     if (currentPlaybackRate === PLAYBACK_RATE_DEFAULT) {
-      additionalText.textContent = ''
+      additionalText.style.display = 'none' // Hide when at default speed
     } else {
       const adjustedTimeRemaining = formatTime(timeToEnd / currentPlaybackRate)
+      additionalText.style.display = 'inline-block' // Show for non-default speed
       additionalText.textContent = `(${adjustedTimeRemaining} left at ${playbackRateFormatted}x)`
     }
   }
 
   // Function to remove existing display elements
   const removeExistingDisplay = () => {
-    const existingDisplay = document.querySelector('.ytp-time-display div')
+    const existingDisplay = document.querySelector('.ytp-time-contents div')
     if (existingDisplay) existingDisplay.remove()
   }
 
@@ -323,7 +333,7 @@
 
     additionalText = document.createElement('div')
     Object.assign(additionalText.style, STYLES.bpscTextDisplay)
-    const timeContainer = document.querySelector('.ytp-time-display')
+    const timeContainer = document.querySelector('.ytp-time-contents')
 
     if (timeContainer) {
       timeContainer.appendChild(additionalText)
@@ -525,10 +535,7 @@
       }
 
       // Validate the playback rate step
-      if (
-        isNaN(newSettings.rateStep) ||
-        newSettings.rateStep <= 0
-      ) {
+      if (isNaN(newSettings.rateStep) || newSettings.rateStep <= 0) {
         alert('Error: Playback Rate Step must be a positive number.')
         return
       }
