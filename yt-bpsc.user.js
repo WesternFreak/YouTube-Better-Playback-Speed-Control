@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube - Better Playback Speed Control
-// @version      1.1.4
+// @version      1.1.5
 // @namespace    https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control
 // @description  Customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 // @icon         https://raw.githubusercontent.com/WesternFreak/YouTube-Better-Playback-Speed-Control/main/img/icon.png
@@ -48,11 +48,13 @@
   const MIN_PLAYBACK_RATE = 0.25 // Minimum allowed playback speed
   const MAX_PLAYBACK_RATE = 5.0 // Maximum allowed playback speed
   const SYNC_THRESHOLD = 10 // Threshold in seconds for sync detection
+  const POPUP_VERTICAL_OFFSET = 7.5 // Divisor for popup vertical position
 
   let storedExtensionSettings = getStoredSettings()
   let currentPlaybackRate = PLAYBACK_RATE_DEFAULT
   let additionalText
   let lastVideoId = ''
+  let rafId = null
 
   const COLORS = {
     textPrimary: '#eee',
@@ -162,7 +164,7 @@
       backgroundColor: COLORS.buttonNegative
     },
     bpscVideoPopup: {
-      position: 'absolute',
+      position: 'fixed',
       transform: 'translate(-50%, -50%)',
       backgroundColor: COLORS.backgroundOverlay,
       color: COLORS.textPrimary,
@@ -200,6 +202,7 @@
   const getPlaybackRate = () => {
     const video = document.querySelector('video')
     if (video) return video.playbackRate
+    return PLAYBACK_RATE_DEFAULT
   }
 
   // changes video playback rate
@@ -248,7 +251,7 @@
 
     const rect = video.getBoundingClientRect()
     popup.style.left = `${rect.left + rect.width / 2}px`
-    popup.style.top = `${rect.top + rect.height / 7.5}px`
+    popup.style.top = `${rect.top + rect.height / POPUP_VERTICAL_OFFSET}px`
     document.body.appendChild(popup)
 
     setTimeout(() => {
@@ -264,11 +267,11 @@
     const playerProgressBar = document.querySelector('.ytp-progress-bar')
     if (!playerProgressBar) return
     const videoTimeNow = parseInt(
-      playerProgressBar.getAttribute('aria-valuenow'),
+      playerProgressBar.getAttribute('aria-valuenow') || '0',
       10
     )
     const videoTimeMax = parseInt(
-      playerProgressBar.getAttribute('aria-valuemax'),
+      playerProgressBar.getAttribute('aria-valuemax') || '0',
       10
     )
     const videoTimeBehind = videoTimeMax - videoTimeNow
@@ -283,7 +286,7 @@
       updateVideoText(videoTimeBehind, playbackRateFormatted)
     }
 
-    requestAnimationFrame(updateDisplay)
+    rafId = requestAnimationFrame(updateDisplay)
   }
 
   // Update text display - livestreams
@@ -297,12 +300,13 @@
 
     if (currentPlaybackRate !== PLAYBACK_RATE_DEFAULT) {
       newText += newText
-        ? ` | ${playbackRateFormatted}x`
-        : `(${playbackRateFormatted}x`
+        ? ` | ${playbackRateFormatted}x)`
+        : `(${playbackRateFormatted}x)`
+    } else if (newText) {
+      newText += ')'
     }
 
     if (newText) {
-      newText += ')'
       additionalText.style.display = 'inline-block'
       additionalText.textContent = newText
     } else {
@@ -323,22 +327,33 @@
 
   // Function to remove existing display elements
   const removeExistingDisplay = () => {
-    const existingDisplay = document.querySelector('.ytp-time-contents div')
+    const existingDisplay = document.querySelector(
+      '.ytp-time-contents .bpsc-display'
+    )
     if (existingDisplay) existingDisplay.remove()
+  }
+
+  // Cleanup function for display
+  const cleanupDisplay = () => {
+    if (rafId) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
   }
 
   // Initialize the display element for time and playback rate
   const initDisplay = () => {
+    cleanupDisplay()
     removeExistingDisplay()
 
     additionalText = document.createElement('div')
+    additionalText.classList.add('bpsc-display')
     Object.assign(additionalText.style, STYLES.bpscTextDisplay)
     const timeContainer = document.querySelector('.ytp-time-contents')
 
     if (timeContainer) {
       timeContainer.appendChild(additionalText)
-      requestAnimationFrame(updateDisplay)
-      observer.disconnect()
+      rafId = requestAnimationFrame(updateDisplay)
     }
   }
 
@@ -380,6 +395,8 @@
   // Event handler for keydown events to modify playback rate
   const handleKeydown = event => {
     if (isTextInputFocused()) return
+
+    storedExtensionSettings = getStoredSettings()
 
     const actionMap = {
       [storedExtensionSettings.rateIncreaseKey]: 'increase',
@@ -597,7 +614,9 @@
   }
 
   // Register the menu command for configuration
-  GM_registerMenuCommand('Settings', createConfigMenu)
+  if (typeof GM_registerMenuCommand !== 'undefined') {
+    GM_registerMenuCommand('Settings', createConfigMenu)
+  }
 
   // MutationObserver to monitor DOM for video element or URL changes
   const observer = new MutationObserver(checkVideoExists)
