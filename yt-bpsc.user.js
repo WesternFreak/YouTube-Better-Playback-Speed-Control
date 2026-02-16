@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube - Better Playback Speed Control
-// @version      1.1.5
+// @version      1.1.6
 // @namespace    https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control
 // @description  Customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 // @icon         https://raw.githubusercontent.com/WesternFreak/YouTube-Better-Playback-Speed-Control/main/img/icon.png
@@ -69,15 +69,9 @@
 
   const STYLES = {
     bpscTextDisplay: {
-      display: 'inline-block',
-      marginLeft: '10px',
-      color: COLORS.textPrimary,
-      height: '24px', // Match YouTube's height
-      backgroundColor: 'rgba(0, 0, 0, 0.3)', // Match YouTube's background
-      borderRadius: '12px', // Match YouTube's rounded corners
-      padding: '0 8px', // Match YouTube's padding
-      fontSize: '14px', // Adjust font size for readability
-      lineHeight: '24px' // Vertically center text within the element
+      marginLeft: '5px',
+      fontSize: '11px',
+      verticalAlign: 'top'
     },
     bpscConfigTitle: {
       color: COLORS.textPrimary,
@@ -346,10 +340,13 @@
     cleanupDisplay()
     removeExistingDisplay()
 
-    additionalText = document.createElement('div')
+    additionalText = document.createElement('span')
     additionalText.classList.add('bpsc-display')
     Object.assign(additionalText.style, STYLES.bpscTextDisplay)
-    const timeContainer = document.querySelector('.ytp-time-contents')
+
+    // Robust search for the container that holds the video time
+    const timeContainer =
+      document.querySelector('.ytp-time-current')?.parentElement
 
     if (timeContainer) {
       timeContainer.appendChild(additionalText)
