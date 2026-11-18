@@ -9,6 +9,12 @@ BPSC is a userscript that allows a better control over the speed of a video with
 
 - **Custom Settings:** Configurable keyboard shortcuts and step change (0.25 by default) via menu.
 
+- **Direct Speed Shortcuts:** Optional keys that jump straight to 1.25x, 1.5x, or 2x.
+
+- **Toggle Speed:** Optional key that switches between your custom speed and 1x, and back again.
+
+- **Keep Speed Between Videos:** Optional setting to keep your current speed when moving to the next video, instead of resetting to 1x.
+
 - **Time Remaining:** Shows the adjusted time to the end of the video at the current speed right in the video player.
 
 ![](img/preview_1.jpg)
@@ -29,15 +35,20 @@ BPSC is a userscript that allows a better control over the speed of a video with
 
 - Increase playback speed: `Numpad +`
 - Decrease playback speed: `Numpad -`
-- Reset playback speed: `Numpad .`
+
+The following shortcuts are optional and are not set by default:
+
+- Reset playback speed to 1x
+- Toggle between your custom speed and 1x
+- Jump to 1.25x, 1.5x, or 2x
 
 ### Change Settings
 
 1. Click the userscript manager icon in your browser.
 2. Locate the "YouTube - Better Playback Speed Control" in the menu, then click "Settings":
-   
+
 ![](img/screenshot_1.png)
 
-3. Use the menu to setup your desired keyboard shortcuts and rate step:
- 
+3. Use the menu to set up your shortcuts, rate step, and whether speed is kept between videos:
+
 ![](img/screenshot_2.png)

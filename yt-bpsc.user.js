@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         YouTube - Better Playback Speed Control
-// @version      1.1.7
+// @version      1.2.0
 // @namespace    https://github.com/WesternFreak/YouTube-Better-Playback-Speed-Control
 // @description  Customizable keyboard shortcuts to increase, decrease and reset playback rate, while also displaying relevant information directly in the video player.
 // @icon         https://raw.githubusercontent.com/WesternFreak/YouTube-Better-Playback-Speed-Control/main/img/icon.png
@@ -19,43 +19,46 @@
 (function () {
   "use strict";
 
-  // Default settings
-  const defaultExtensionSettings = {
+  // ---------------------------------------------------------------------------
+  // Constants
+  // ---------------------------------------------------------------------------
+
+  const PLAYBACK_RATE_DEFAULT = 1.0;
+  const MIN_PLAYBACK_RATE = 0.25;
+  const MAX_PLAYBACK_RATE = 5.0;
+  const SYNC_THRESHOLD = 10; // seconds behind live before the "behind" text appears
+  const POPUP_VERTICAL_DIVISOR = 7.5; // popup sits at videoHeight / this value from the top
+  const POPUP_VISIBLE_MS = 500;
+  const POPUP_FADE_MS = 500; // must match the CSS transition duration below
+  const DISPLAY_UPDATE_INTERVAL_MS = 250;
+  const OBSERVER_DEBOUNCE_MS = 150;
+  const KEEP_RATE_GUARD_MS = 3000; // window after a video change in which YouTube's reset is undone
+  const VIDEO_SELECTOR = "video.html5-main-video";
+
+  // Speeds with their own optional direct shortcut
+  const PRESET_RATES = [1.25, 1.5, 2.0];
+
+  const DEFAULT_SETTINGS = {
     rateIncreaseKey: "NumpadAdd",
     rateDecreaseKey: "NumpadSubtract",
-    rateResetKey: "NumpadDecimal",
+    rateResetKey: "", // optional
     rateStep: 0.25,
+    toggleKey: "", // optional
+    keepSpeed: false,
+    presetKeys: PRESET_RATES.map(() => ""), // optional
   };
 
-  // Load settings
-  const getStoredSettings = () => ({
-    rateIncreaseKey: GM_getValue(
-      "speedIncreaseKey",
-      defaultExtensionSettings.rateIncreaseKey,
-    ),
-    rateDecreaseKey: GM_getValue(
-      "speedDecreaseKey",
-      defaultExtensionSettings.rateDecreaseKey,
-    ),
-    rateResetKey: GM_getValue(
-      "speedResetKey",
-      defaultExtensionSettings.rateResetKey,
-    ),
-    rateStep: GM_getValue("rateStep", defaultExtensionSettings.rateStep),
-  });
+  // Storage keys match earlier versions so existing user settings still load.
+  const STORAGE_KEYS = {
+    rateIncreaseKey: "speedIncreaseKey",
+    rateDecreaseKey: "speedDecreaseKey",
+    rateResetKey: "speedResetKey",
+    rateStep: "rateStep",
+    toggleKey: "toggleRateKey",
+    keepSpeed: "keepSpeedBetweenVideos",
+  };
 
-  const PLAYBACK_RATE_DEFAULT = 1.0; // Default playback speed
-  const MIN_PLAYBACK_RATE = 0.25; // Minimum allowed playback speed
-  const MAX_PLAYBACK_RATE = 5.0; // Maximum allowed playback speed
-  const SYNC_THRESHOLD = 10; // Threshold in seconds for sync detection
-  const POPUP_VERTICAL_OFFSET = 7.5; // Divisor for popup vertical position
-
-  let storedExtensionSettings = getStoredSettings();
-  let currentPlaybackRate = PLAYBACK_RATE_DEFAULT;
-  let lastPlayerRate = PLAYBACK_RATE_DEFAULT;
-  let additionalText;
-  let lastVideoId = "";
-  let rafId = null;
+  const presetStorageKey = (index) => `speedPreset${index}Key`;
 
   const COLORS = {
     textPrimary: "#eee",
@@ -71,8 +74,9 @@
   const STYLES = {
     bpscTextDisplay: {
       marginLeft: "5px",
-      fontSize: "11px",
+      fontSize: "12px",
       verticalAlign: "top",
+      textShadow: "0 1px 2px rgba(0, 0, 0, 0.35)",
     },
     bpscConfigTitle: {
       color: COLORS.textPrimary,
@@ -100,6 +104,9 @@
       boxShadow: "0 2px 10px rgba(0, 0, 0, 0.5)",
       maxWidth: "350px",
       width: "100%",
+      maxHeight: "90vh",
+      overflowY: "auto",
+      boxSizing: "border-box",
     },
     bpscConfigOverlay: {
       position: "fixed",
@@ -127,7 +134,7 @@
       color: COLORS.textSecondary,
     },
     bpscConfigInputLabel: {
-      display: "absolute",
+      flex: "1",
       marginBottom: "5px",
       width: "120px",
       color: COLORS.textPrimary,
@@ -168,15 +175,76 @@
       fontFamily: "Arial, sans-serif",
       fontSize: "large",
       opacity: "1",
-      transition: "opacity 0.5s ease",
+      transition: `opacity ${POPUP_FADE_MS}ms ease`,
     },
   };
 
-  // format time as HH:MM:SS
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+
+  const getStoredSettings = () => {
+    const step = Number(
+      GM_getValue(STORAGE_KEYS.rateStep, DEFAULT_SETTINGS.rateStep),
+    );
+    return {
+      rateIncreaseKey: GM_getValue(
+        STORAGE_KEYS.rateIncreaseKey,
+        DEFAULT_SETTINGS.rateIncreaseKey,
+      ),
+      rateDecreaseKey: GM_getValue(
+        STORAGE_KEYS.rateDecreaseKey,
+        DEFAULT_SETTINGS.rateDecreaseKey,
+      ),
+      rateResetKey: GM_getValue(
+        STORAGE_KEYS.rateResetKey,
+        DEFAULT_SETTINGS.rateResetKey,
+      ),
+      rateStep:
+        Number.isFinite(step) && step > 0 ? step : DEFAULT_SETTINGS.rateStep,
+      toggleKey: GM_getValue(
+        STORAGE_KEYS.toggleKey,
+        DEFAULT_SETTINGS.toggleKey,
+      ),
+      keepSpeed: Boolean(
+        GM_getValue(STORAGE_KEYS.keepSpeed, DEFAULT_SETTINGS.keepSpeed),
+      ),
+      presetKeys: PRESET_RATES.map((_, i) =>
+        GM_getValue(presetStorageKey(i), ""),
+      ),
+    };
+  };
+
+  let storedExtensionSettings = getStoredSettings();
+  let currentPlaybackRate = PLAYBACK_RATE_DEFAULT;
+  let lastCustomRate = null; // last non-1x rate, used by the toggle key
+  let keepRateTarget = null; // rate to restore if YouTube resets it right after a video change
+  let keepRateUntil = 0;
+  let lastVideoId = null;
+  let additionalText = null; // the on-screen time/rate span
+  let displayIntervalId = null;
+  let checkScheduled = false;
+  let activeCapture = null; // keybind capture in progress, if any
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  const getVideo = () => document.querySelector(VIDEO_SELECTOR);
+
+  // Fullscreen only renders the fullscreen element and its children,
+  // so floating UI has to be attached there while fullscreen is active.
+  const getOverlayRoot = () => document.fullscreenElement || document.body;
+
+  // Avoid floating-point drift such as 1.0 + 0.1 + 0.1 = 1.2000000000000002
+  const roundRate = (rate) => Math.round(rate * 1000) / 1000;
+
+  // format time as [HH:]MM:SS
   const formatTime = (time) => {
-    const hours = Math.floor(time / 3600);
-    const minutes = Math.floor((time % 3600) / 60);
-    const seconds = Math.floor(time % 60);
+    const safe = Number.isFinite(time) && time > 0 ? time : 0;
+    const hours = Math.floor(safe / 3600);
+    const minutes = Math.floor((safe % 3600) / 60);
+    const seconds = Math.floor(safe % 60);
 
     const formattedHours =
       hours > 0 ? hours.toString().padStart(2, "0") + ":" : "";
@@ -186,52 +254,40 @@
     return `${formattedHours}${formattedMinutes}:${formattedSeconds}`;
   };
 
-  // set video playback rate
-  const setPlaybackRate = (rate) =>
-    document.querySelector("video") &&
-    (document.querySelector("video").playbackRate = rate);
+  const getVideoIdFromUrl = () =>
+    new URLSearchParams(window.location.search).get("v");
 
-  // get video playback rate
-  const getPlaybackRate = () => currentPlaybackRate;
-
-  // changes video playback rate
-  const modifyPlaybackRate = (action) => {
-    currentPlaybackRate = getPlaybackRate();
-    let newRate = currentPlaybackRate;
-
-    switch (action) {
-      case "reset":
-        newRate = PLAYBACK_RATE_DEFAULT;
-        break;
-      case "increase":
-        newRate = Math.min(
-          currentPlaybackRate + storedExtensionSettings.rateStep,
-          MAX_PLAYBACK_RATE,
-        );
-        break;
-      case "decrease":
-        newRate = Math.max(
-          currentPlaybackRate - storedExtensionSettings.rateStep,
-          MIN_PLAYBACK_RATE,
-        );
-        break;
-      default:
-        console.warn(`BPSC error - unknown playback action: ${action}`);
-        return;
+  // Set the rate through YouTube's player API as well as the <video> element.
+  // YouTube keeps its own rate state; if we only set the element, its native
+  // speed keybinds start from the stale value instead of ours.
+  const setPlaybackRate = (rate) => {
+    const player = document.querySelector(".html5-video-player");
+    if (player && typeof player.setPlaybackRate === "function") {
+      try {
+        player.setPlaybackRate(rate);
+      } catch (err) {
+        console.warn("BPSC: player.setPlaybackRate failed", err);
+      }
     }
 
-    currentPlaybackRate = newRate;
-    setPlaybackRate(currentPlaybackRate);
-    showPopup(`${currentPlaybackRate.toFixed(2)}x`);
+    const video = getVideo();
+    if (video && Math.abs(video.playbackRate - rate) > 0.001) {
+      video.playbackRate = rate;
+    }
   };
 
-  // display popup in video player's top-middle
+  // ---------------------------------------------------------------------------
+  // Playback rate control
+  // ---------------------------------------------------------------------------
+
+  // Briefly show the new rate in the middle of the video
   const showPopup = (message) => {
-    const video = document.querySelector("video");
+    const video = getVideo();
     if (!video) return;
 
-    const existingPopup = document.querySelector(".custom-playback-popup");
-    if (existingPopup) existingPopup.remove();
+    document
+      .querySelectorAll(".custom-playback-popup")
+      .forEach((el) => el.remove());
 
     const popup = document.createElement("div");
     popup.textContent = message;
@@ -240,229 +296,437 @@
 
     const rect = video.getBoundingClientRect();
     popup.style.left = `${rect.left + rect.width / 2}px`;
-    popup.style.top = `${rect.top + rect.height / POPUP_VERTICAL_OFFSET}px`;
-    document.body.appendChild(popup);
+    popup.style.top = `${rect.top + rect.height / POPUP_VERTICAL_DIVISOR}px`;
+    getOverlayRoot().appendChild(popup);
 
     setTimeout(() => {
       popup.style.opacity = "0";
-      setTimeout(() => popup.remove(), 100);
-    }, 500);
+      setTimeout(() => popup.remove(), POPUP_FADE_MS + 100);
+    }, POPUP_VISIBLE_MS);
   };
 
-  // Update player text display
+  // Every rate change made by a shortcut goes through here
+  const applyRate = (rate) => {
+    currentPlaybackRate = roundRate(rate);
+    keepRateTarget = null; // a deliberate change cancels any pending keep-speed restore
+    if (currentPlaybackRate !== PLAYBACK_RATE_DEFAULT) {
+      lastCustomRate = currentPlaybackRate;
+    }
+    setPlaybackRate(currentPlaybackRate);
+    showPopup(`${currentPlaybackRate.toFixed(2)}x`);
+  };
+
+  const modifyPlaybackRate = (action) => {
+    const step = storedExtensionSettings.rateStep;
+
+    switch (action) {
+      case "reset":
+        return applyRate(PLAYBACK_RATE_DEFAULT);
+      case "increase":
+        return applyRate(
+          Math.min(currentPlaybackRate + step, MAX_PLAYBACK_RATE),
+        );
+      case "decrease":
+        return applyRate(
+          Math.max(currentPlaybackRate - step, MIN_PLAYBACK_RATE),
+        );
+      case "toggle":
+        if (currentPlaybackRate !== PLAYBACK_RATE_DEFAULT) {
+          return applyRate(PLAYBACK_RATE_DEFAULT);
+        }
+        // Go back to the last custom speed; nothing to return to yet
+        if (lastCustomRate !== null) return applyRate(lastCustomRate);
+        return;
+      default:
+        if (action.startsWith("preset:")) {
+          const index = Number(action.split(":")[1]);
+          return applyRate(PRESET_RATES[index]);
+        }
+        console.warn(`BPSC error - unknown playback action: ${action}`);
+    }
+  };
+
+  // Keep the video in line with our rate if something has drifted away from it.
+  // The ratechange listener is the source of truth for native changes.
+  const syncRateWithPlayer = (video) => {
+    if (Math.abs(video.playbackRate - currentPlaybackRate) > 0.001) {
+      setPlaybackRate(currentPlaybackRate);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // On-screen display (time remaining / live delay, with current rate)
+  // ---------------------------------------------------------------------------
+
+  const setDisplayText = (text) => {
+    if (!additionalText) return;
+
+    if (!text) {
+      additionalText.style.display = "none";
+      return;
+    }
+
+    if (additionalText.textContent !== text) additionalText.textContent = text;
+    additionalText.style.display = "inline-block";
+  };
+
+  const buildDisplayText = (timeBehind, isLive) => {
+    const rateLabel = `${currentPlaybackRate.toFixed(2)}x`;
+
+    if (isLive) {
+      const details = [];
+      if (timeBehind > SYNC_THRESHOLD)
+        details.push(`${formatTime(timeBehind)} behind`);
+      if (currentPlaybackRate !== PLAYBACK_RATE_DEFAULT)
+        details.push(rateLabel);
+      return details.length ? `(${details.join(" | ")})` : "";
+    }
+
+    if (currentPlaybackRate === PLAYBACK_RATE_DEFAULT) return "";
+    return `(${formatTime(timeBehind / currentPlaybackRate)} left at ${rateLabel})`;
+  };
+
   const updateDisplay = () => {
-    const video = document.querySelector("video");
+    if (!additionalText || !additionalText.isConnected) {
+      cleanupDisplay();
+      return;
+    }
+
+    const video = getVideo();
     if (!video) return;
-    const playerRate =
-      document.querySelector(".html5-video-player")?.getPlaybackRate() ||
-      PLAYBACK_RATE_DEFAULT;
-    if (playerRate !== lastPlayerRate)
-      currentPlaybackRate = lastPlayerRate = playerRate;
-    if (video.playbackRate !== currentPlaybackRate)
-      video.playbackRate = currentPlaybackRate;
-    const playerProgressBar = document.querySelector(".ytp-progress-bar");
-    if (!playerProgressBar) return;
-    const videoTimeNow = parseInt(
-      playerProgressBar.getAttribute("aria-valuenow") || "0",
-      10,
-    );
-    const videoTimeMax = parseInt(
-      playerProgressBar.getAttribute("aria-valuemax") || "0",
-      10,
-    );
-    const videoTimeBehind = videoTimeMax - videoTimeNow;
-    const isLivestream = document.querySelector(
+
+    syncRateWithPlayer(video);
+
+    // When a chapter title follows the text, match the gap on the right to the
+    // gap on the left so the spacing is even. The chapter title can overlap the
+    // text's edge, so the right margin is adjusted until the two gaps are equal.
+    const chapter = document.querySelector(".ytp-chapter-container");
+    const timeEl =
+      document.querySelector(".ytp-time-display .ytp-time-wrapper") ||
+      document.querySelector(".ytp-time-display");
+    if (
+      chapter &&
+      timeEl &&
+      additionalText.style.display !== "none" &&
+      chapter.getBoundingClientRect().width > 0 &&
+      chapter.getBoundingClientRect().left >=
+        additionalText.getBoundingClientRect().left
+    ) {
+      const textRect = additionalText.getBoundingClientRect();
+      const leftGap = textRect.left - timeEl.getBoundingClientRect().right;
+      const rightGap = chapter.getBoundingClientRect().left - textRect.right;
+      const currentMargin = parseFloat(additionalText.style.marginRight) || 0;
+      const value = `${Math.max(0, currentMargin + (leftGap - rightGap)).toFixed(1)}px`;
+      if (additionalText.style.marginRight !== value)
+        additionalText.style.marginRight = value;
+    } else if (additionalText.style.marginRight) {
+      additionalText.style.marginRight = "";
+    }
+
+    const progressBar = document.querySelector(".ytp-progress-bar");
+    if (!progressBar) {
+      setDisplayText("");
+      return;
+    }
+
+    const now = parseInt(progressBar.getAttribute("aria-valuenow") || "0", 10);
+    const max = parseInt(progressBar.getAttribute("aria-valuemax") || "0", 10);
+    // The live badge also exists, hidden, on regular videos, so an attribute
+    // check alone isn't enough. Require the badge to actually be rendered.
+    const liveBadge = document.querySelector(
       ".ytp-live-badge[aria-label], .ytp-live-badge[title]",
     );
-    const playbackRateFormatted = getPlaybackRate().toFixed(2);
+    const isLive = Boolean(liveBadge && liveBadge.getClientRects().length > 0);
 
-    if (isLivestream) {
-      updateLivestreamText(videoTimeBehind, playbackRateFormatted);
-    } else {
-      updateVideoText(videoTimeBehind, playbackRateFormatted);
-    }
-
-    rafId = requestAnimationFrame(updateDisplay);
+    setDisplayText(buildDisplayText(Math.max(0, max - now), isLive));
   };
 
-  // Update text display - livestreams
-  const updateLivestreamText = (timeBehindLive, playbackRateFormatted) => {
-    additionalText.style.display = "none";
-    let newText = "";
-
-    if (timeBehindLive > SYNC_THRESHOLD) {
-      newText = `(${formatTime(timeBehindLive)} behind`;
-    }
-
-    if (currentPlaybackRate !== PLAYBACK_RATE_DEFAULT) {
-      newText += newText
-        ? ` | ${playbackRateFormatted}x)`
-        : `(${playbackRateFormatted}x)`;
-    } else if (newText) {
-      newText += ")";
-    }
-
-    if (newText) {
-      additionalText.style.display = "inline-block";
-      additionalText.textContent = newText;
-    } else {
-      additionalText.style.display = "none";
-    }
-  };
-
-  // Function to update the text on the screen for regular videos
-  const updateVideoText = (timeToEnd, playbackRateFormatted) => {
-    if (currentPlaybackRate === PLAYBACK_RATE_DEFAULT) {
-      additionalText.style.display = "none"; // Hide when at default speed
-    } else {
-      const adjustedTimeRemaining = formatTime(timeToEnd / currentPlaybackRate);
-      additionalText.style.display = "inline-block"; // Show for non-default speed
-      additionalText.textContent = `(${adjustedTimeRemaining} left at ${playbackRateFormatted}x)`;
-    }
-  };
-
-  // Function to remove existing display elements
-  const removeExistingDisplay = () => {
-    const existingDisplay = document.querySelector(
-      ".ytp-time-contents .bpsc-display",
-    );
-    if (existingDisplay) existingDisplay.remove();
-  };
-
-  // Cleanup function for display
   const cleanupDisplay = () => {
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
+    if (displayIntervalId) {
+      clearInterval(displayIntervalId);
+      displayIntervalId = null;
     }
   };
 
-  // Initialize the display element for time and playback rate
+  const removeExistingDisplay = () => {
+    document.querySelectorAll(".bpsc-display").forEach((el) => el.remove());
+  };
+
+  // Attaches the display if the player UI is ready. Otherwise checkVideoExists
+  // retries on the next DOM change.
   const initDisplay = () => {
     cleanupDisplay();
     removeExistingDisplay();
+    additionalText = null;
+
+    // Place the text after the time display, not inside the elapsed-time
+    // element. On live streams YouTube hides that element, which made the
+    // text exist in the DOM but never appear on screen.
+    const timeDisplay = document.querySelector(".ytp-time-display");
+    if (!timeDisplay) return;
 
     additionalText = document.createElement("span");
     additionalText.classList.add("bpsc-display");
-    Object.assign(additionalText.style, STYLES.bpscTextDisplay);
+    Object.assign(additionalText.style, STYLES.bpscTextDisplay, {
+      display: "none",
+    });
+    // Match YouTube's time display so the text sits in the same pill style.
+    // Falls back to a plain dark pill if YouTube's display has no background of its own.
+    // YouTube draws the pill on the inner wrapper, not on .ytp-time-display itself
+    const pill = timeDisplay.querySelector(".ytp-time-wrapper") || timeDisplay;
+    const ref = getComputedStyle(pill);
+    const pillHeight = parseFloat(ref.height);
+    const hasOwnBackground =
+      ref.backgroundColor &&
+      ref.backgroundColor !== "rgba(0, 0, 0, 0)" &&
+      ref.backgroundColor !== "transparent";
 
-    // Robust search for the container that holds the video time
-    const timeContainer =
-      document.querySelector(".ytp-time-current")?.parentElement;
+    Object.assign(additionalText.style, {
+      boxSizing: "border-box",
+      alignSelf: "center",
+      flexShrink: "0",
+      whiteSpace: "nowrap",
+      height: pillHeight ? `${pillHeight}px` : "28px",
+      lineHeight: pillHeight ? `${pillHeight}px` : "28px",
+      padding: hasOwnBackground ? ref.padding : "0 8px",
+      borderRadius: hasOwnBackground ? ref.borderRadius : "4px",
+      backgroundColor: hasOwnBackground
+        ? ref.backgroundColor
+        : "rgba(28, 28, 28, 0.8)",
+      backdropFilter: hasOwnBackground ? ref.backdropFilter : "none",
+      WebkitBackdropFilter: hasOwnBackground ? ref.backdropFilter : "none",
+    });
 
-    if (timeContainer) {
-      timeContainer.appendChild(additionalText);
-      rafId = requestAnimationFrame(updateDisplay);
-    }
+    timeDisplay.after(additionalText);
+
+    displayIntervalId = setInterval(updateDisplay, DISPLAY_UPDATE_INTERVAL_MS);
+    updateDisplay();
   };
 
-  // Function to get the current video ID from the URL
-  const getVideoIdFromUrl = () => {
-    const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get("v");
-  };
+  // ---------------------------------------------------------------------------
+  // Video / navigation tracking
+  // ---------------------------------------------------------------------------
 
-  // Check if a video element exists and initialize the display
   const checkVideoExists = () => {
-    const video = document.querySelector("video");
     const currentVideoId = getVideoIdFromUrl();
+    if (!getVideo() || !currentVideoId) return;
 
-    if (video && currentVideoId !== lastVideoId) {
+    const videoChanged = currentVideoId !== lastVideoId;
+    if (videoChanged) {
       lastVideoId = currentVideoId;
-      currentPlaybackRate = PLAYBACK_RATE_DEFAULT;
+
+      if (storedExtensionSettings.keepSpeed) {
+        // YouTube may reset the rate when the new video loads;
+        // the ratechange listener restores this target during the guard window.
+        keepRateTarget = currentPlaybackRate;
+        keepRateUntil = Date.now() + KEEP_RATE_GUARD_MS;
+      } else {
+        keepRateTarget = null;
+        currentPlaybackRate = PLAYBACK_RATE_DEFAULT;
+      }
       setPlaybackRate(currentPlaybackRate);
+    }
+
+    // Re-init on a new video, or if the display element is missing
+    // (for example because the player UI wasn't ready the last time).
+    if (videoChanged || !document.querySelector(".bpsc-display")) {
       initDisplay();
     }
   };
 
-  // Function to check if the focused element is a text input, textarea, or contenteditable element
-  const isTextInputFocused = () => {
-    const activeElement = document.activeElement;
-
-    const isTextInput = (element) =>
-      element.tagName === "INPUT" &&
-      ["text", "search", "email"].includes(element.type);
-
-    return (
-      activeElement.tagName === "TEXTAREA" ||
-      isTextInput(activeElement) ||
-      (activeElement.hasAttribute("contenteditable") &&
-        activeElement.isContentEditable)
-    );
+  // Debounce: YouTube mutates the DOM constantly
+  const scheduleCheck = () => {
+    if (checkScheduled) return;
+    checkScheduled = true;
+    setTimeout(() => {
+      checkScheduled = false;
+      checkVideoExists();
+    }, OBSERVER_DEBOUNCE_MS);
   };
 
-  // Event handler for keydown events to modify playback rate
+  // ---------------------------------------------------------------------------
+  // Keyboard handling
+  // ---------------------------------------------------------------------------
+
+  // True when the user is typing somewhere, so shortcuts shouldn't fire
+  const isTextInputFocused = () => {
+    const el = document.activeElement;
+    if (!el) return false;
+    if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+
+    const nonTextTypes = [
+      "checkbox",
+      "radio",
+      "button",
+      "submit",
+      "reset",
+      "range",
+      "file",
+      "color",
+    ];
+    return el.tagName === "INPUT" && !nonTextTypes.includes(el.type);
+  };
+
   const handleKeydown = (event) => {
+    // Leave Ctrl/Alt/Meta combinations to the browser and OS
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
     if (isTextInputFocused()) return;
 
     storedExtensionSettings = getStoredSettings();
+    const s = storedExtensionSettings;
 
-    const actionMap = {
-      [storedExtensionSettings.rateIncreaseKey]: "increase",
-      [storedExtensionSettings.rateDecreaseKey]: "decrease",
-      [storedExtensionSettings.rateResetKey]: "reset",
+    // Only bind keys that are actually set (optional shortcuts may be empty)
+    const actionMap = {};
+    const bind = (key, action) => {
+      if (key) actionMap[key] = action;
     };
 
-    const action = actionMap[event.code];
+    bind(s.rateIncreaseKey, "increase");
+    bind(s.rateDecreaseKey, "decrease");
+    bind(s.rateResetKey, "reset");
+    bind(s.toggleKey, "toggle");
+    s.presetKeys.forEach((key, i) => bind(key, `preset:${i}`));
 
+    const action = actionMap[event.code];
     if (action) modifyPlaybackRate(action);
   };
 
-  // Create a modal for configuring script settings
+  // ---------------------------------------------------------------------------
+  // Settings modal
+  // ---------------------------------------------------------------------------
+
+  const updateSettings = (newSettings) => {
+    Object.assign(storedExtensionSettings, newSettings);
+
+    for (const [settingName, storageKey] of Object.entries(STORAGE_KEYS)) {
+      GM_setValue(storageKey, newSettings[settingName]);
+    }
+    newSettings.presetKeys.forEach((key, i) =>
+      GM_setValue(presetStorageKey(i), key),
+    );
+  };
+
+  const cancelKeybindCapture = () => {
+    if (!activeCapture) return;
+    window.removeEventListener("keydown", activeCapture.listener, true);
+    activeCapture.overlay.remove();
+    activeCapture = null;
+  };
+
   const createConfigMenu = () => {
-    // prevent multiple modals
     if (document.querySelector(".bpsc-config-modal")) return;
 
-    // config modal container
     const modal = document.createElement("div");
     modal.className = "bpsc-config-modal";
     Object.assign(modal.style, STYLES.bpscConfigContainer);
 
-    // config modal content
     const modalContent = document.createElement("div");
     Object.assign(modalContent.style, STYLES.bpscConfigContent);
 
-    // config modal title
     const title = document.createElement("h2");
     title.textContent = "Better Playback Speed Control - Settings";
     Object.assign(title.style, STYLES.bpscConfigTitle);
     modalContent.appendChild(title);
 
-    // create a label, input field, set button, and append them
-    // Add the input field for the playback rate step in the config menu
-    const createInputContainer = (label, value, id, isStep = false) => {
-      const inputContainer = document.createElement("div");
-      inputContainer.style.marginBottom = "15px";
-      inputContainer.style.display = "flex";
+    const closeModal = () => {
+      cancelKeybindCapture();
+      modal.remove();
+    };
 
-      const inputLabel = document.createElement("label");
-      inputLabel.textContent = label;
-      inputLabel.style.flex = "1";
-      Object.assign(inputLabel.style, STYLES.bpscConfigInputLabel);
+    const getInputValue = (id) => modal.querySelector(`#${id}`).value;
 
-      const inputText = document.createElement("input");
-      inputText.type = "text";
-      inputText.value = value;
-      inputText.id = id;
-      inputText.readOnly = !isStep;
-      Object.assign(inputText.style, STYLES.bpscConfigInput);
+    // Capture the next key press for a shortcut field.
+    // Escape cancels, Backspace/Delete clears the field.
+    const setKeybind = (inputId) => {
+      cancelKeybindCapture();
 
-      inputContainer.appendChild(inputLabel);
-      inputContainer.appendChild(inputText);
+      const input = modal.querySelector(`#${inputId}`);
+
+      const overlay = document.createElement("div");
+      overlay.textContent = "Press a key (Esc to cancel, Backspace to clear)";
+      Object.assign(overlay.style, STYLES.bpscConfigOverlay);
+      getOverlayRoot().appendChild(overlay);
+
+      // Capture phase on window: runs first, so the key doesn't also trigger
+      // a speed change or YouTube's own handlers.
+      const listener = (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        if (event.code === "Escape") {
+          // leave the value unchanged
+        } else if (event.code === "Backspace" || event.code === "Delete") {
+          input.value = "";
+        } else {
+          input.value = event.code;
+        }
+        cancelKeybindCapture();
+      };
+
+      activeCapture = { overlay, listener };
+      window.addEventListener("keydown", listener, true);
+    };
+
+    const createInputContainer = (label, value, id, options = {}) => {
+      const { isStep = false, placeholder = "" } = options;
+
+      const row = document.createElement("div");
+      row.style.marginBottom = "15px";
+      row.style.display = "flex";
+      row.style.alignItems = "center";
+
+      const labelEl = document.createElement("label");
+      labelEl.textContent = label;
+      Object.assign(labelEl.style, STYLES.bpscConfigInputLabel);
+
+      const input = document.createElement("input");
+      input.type = isStep ? "number" : "text";
+      input.value = value;
+      input.id = id;
+      input.placeholder = placeholder;
+      input.readOnly = !isStep;
+      if (isStep) {
+        input.min = "0.01";
+        input.step = "any";
+      }
+      Object.assign(input.style, STYLES.bpscConfigInput);
+
+      row.append(labelEl, input);
 
       if (!isStep) {
         const setButton = document.createElement("button");
         setButton.textContent = "Set";
         Object.assign(setButton.style, STYLES.bpscConfigButtonSet);
-
         setButton.addEventListener("click", () => setKeybind(id));
-        inputContainer.appendChild(setButton);
+        row.appendChild(setButton);
       }
 
-      return inputContainer;
+      return row;
     };
 
-    // input field and set button per keybind
+    const createCheckboxRow = (label, checked, id) => {
+      const row = document.createElement("div");
+      row.style.marginBottom = "15px";
+      row.style.display = "flex";
+      row.style.alignItems = "center";
+
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.id = id;
+      input.checked = checked;
+      input.style.marginRight = "10px";
+
+      const labelEl = document.createElement("label");
+      labelEl.htmlFor = id;
+      labelEl.textContent = label;
+      labelEl.style.color = COLORS.textPrimary;
+      labelEl.style.cursor = "pointer";
+
+      row.append(input, labelEl);
+      return row;
+    };
+
+    // Required shortcuts
     modalContent.appendChild(
       createInputContainer(
         "Increase Speed Shortcut",
@@ -477,28 +741,120 @@
         "decreaseKeyInput",
       ),
     );
+
+    // Optional shortcuts
     modalContent.appendChild(
       createInputContainer(
         "Reset Speed Shortcut",
         storedExtensionSettings.rateResetKey,
         "resetKeyInput",
+        {
+          placeholder: "Not set",
+        },
+      ),
+    );
+    modalContent.appendChild(
+      createInputContainer(
+        "Toggle Custom / 1x Shortcut",
+        storedExtensionSettings.toggleKey,
+        "toggleKeyInput",
+        {
+          placeholder: "Not set",
+        },
+      ),
+    );
+    PRESET_RATES.forEach((rate, i) => {
+      modalContent.appendChild(
+        createInputContainer(
+          `${rate.toFixed(2)}x Shortcut`,
+          storedExtensionSettings.presetKeys[i] || "",
+          `presetKeyInput${i}`,
+          { placeholder: "Not set" },
+        ),
+      );
+    });
+
+    modalContent.appendChild(
+      createInputContainer(
+        "Playback Rate Step",
+        storedExtensionSettings.rateStep,
+        "rateStepInput",
+        { isStep: true },
       ),
     );
 
     modalContent.appendChild(
-      createInputContainer(
-        "Playback Rate\nStep",
-        storedExtensionSettings.rateStep,
-        "rateStepInput",
-        true, // editable input
+      createCheckboxRow(
+        "Keep speed between videos",
+        storedExtensionSettings.keepSpeed,
+        "keepSpeedInput",
       ),
     );
 
-    // button container
+    const resetSettings = () => {
+      modal.querySelector("#increaseKeyInput").value =
+        DEFAULT_SETTINGS.rateIncreaseKey;
+      modal.querySelector("#decreaseKeyInput").value =
+        DEFAULT_SETTINGS.rateDecreaseKey;
+      modal.querySelector("#resetKeyInput").value =
+        DEFAULT_SETTINGS.rateResetKey;
+      modal.querySelector("#toggleKeyInput").value = DEFAULT_SETTINGS.toggleKey;
+      PRESET_RATES.forEach((_, i) => {
+        modal.querySelector(`#presetKeyInput${i}`).value =
+          DEFAULT_SETTINGS.presetKeys[i];
+      });
+      modal.querySelector("#rateStepInput").value = DEFAULT_SETTINGS.rateStep;
+      modal.querySelector("#keepSpeedInput").checked =
+        DEFAULT_SETTINGS.keepSpeed;
+    };
+
+    const saveSettings = () => {
+      const newSettings = {
+        rateIncreaseKey: getInputValue("increaseKeyInput").trim(),
+        rateDecreaseKey: getInputValue("decreaseKeyInput").trim(),
+        rateResetKey: getInputValue("resetKeyInput").trim(),
+        toggleKey: getInputValue("toggleKeyInput").trim(),
+        presetKeys: PRESET_RATES.map((_, i) =>
+          getInputValue(`presetKeyInput${i}`).trim(),
+        ),
+        rateStep: parseFloat(getInputValue("rateStepInput")),
+        keepSpeed: modal.querySelector("#keepSpeedInput").checked,
+      };
+
+      const required = [
+        newSettings.rateIncreaseKey,
+        newSettings.rateDecreaseKey,
+      ];
+      if (required.some((key) => !key)) {
+        alert("Error: Increase and decrease shortcuts must be set.");
+        return;
+      }
+
+      const allKeys = [
+        ...required,
+        newSettings.rateResetKey,
+        newSettings.toggleKey,
+        ...newSettings.presetKeys,
+      ].filter(Boolean);
+      if (new Set(allKeys).size !== allKeys.length) {
+        alert(
+          "Error: Conflicting keybinds detected.\nPlease ensure all shortcuts are unique.",
+        );
+        return;
+      }
+
+      if (!Number.isFinite(newSettings.rateStep) || newSettings.rateStep <= 0) {
+        alert("Error: Playback Rate Step must be a positive number.");
+        return;
+      }
+
+      updateSettings(newSettings);
+      closeModal();
+    };
+
     const buttonContainer = document.createElement("div");
     buttonContainer.style.textAlign = "center";
 
-    // Save, Reset, and Cancel buttons
     const saveButton = document.createElement("button");
     saveButton.textContent = "Save";
     Object.assign(
@@ -521,121 +877,59 @@
 
     saveButton.addEventListener("click", saveSettings);
     resetButton.addEventListener("click", resetSettings);
-    cancelButton.addEventListener("click", () => modal.remove());
+    cancelButton.addEventListener("click", closeModal);
 
-    buttonContainer.appendChild(saveButton);
-    buttonContainer.appendChild(resetButton);
-    buttonContainer.appendChild(cancelButton);
+    buttonContainer.append(saveButton, resetButton, cancelButton);
     modalContent.appendChild(buttonContainer);
 
-    // Finish the modal
+    // Clicking the dimmed background closes the modal
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeModal();
+    });
+
     modal.appendChild(modalContent);
-    document.body.appendChild(modal);
-
-    // Function to update stored settings and save them
-    const updateSettings = (newSettings) => {
-      Object.assign(storedExtensionSettings, newSettings);
-      GM_setValue("speedIncreaseKey", newSettings.rateIncreaseKey);
-      GM_setValue("speedDecreaseKey", newSettings.rateDecreaseKey);
-      GM_setValue("speedResetKey", newSettings.rateResetKey);
-      GM_setValue("rateStep", newSettings.rateStep);
-    };
-
-    // Save Settings function with validation for playback rate step
-    function saveSettings() {
-      const newSettings = {
-        rateIncreaseKey: document.getElementById("increaseKeyInput").value,
-        rateDecreaseKey: document.getElementById("decreaseKeyInput").value,
-        rateResetKey: document.getElementById("resetKeyInput").value,
-        rateStep: parseFloat(document.getElementById("rateStepInput").value),
-      };
-
-      // Validate the playback rate step
-      if (isNaN(newSettings.rateStep) || newSettings.rateStep <= 0) {
-        alert("Error: Playback Rate Step must be a positive number.");
-        return;
-      }
-
-      // Check for conflicts in keybinds
-      const keys = Object.values(newSettings).slice(0, 3);
-      const hasConflicts = keys.some(
-        (key, index) => keys.indexOf(key) !== index,
-      );
-
-      if (hasConflicts) {
-        alert(
-          "Error: Conflicting keybinds detected.\nPlease ensure all shortcuts are unique.",
-        );
-        return;
-      }
-
-      updateSettings(newSettings);
-      modal.remove();
-    }
-
-    // Function to reset the settings to their defaults
-    function resetSettings() {
-      document.getElementById("increaseKeyInput").value =
-        defaultExtensionSettings.rateIncreaseKey;
-      document.getElementById("decreaseKeyInput").value =
-        defaultExtensionSettings.rateDecreaseKey;
-      document.getElementById("resetKeyInput").value =
-        defaultExtensionSettings.rateResetKey;
-      document.getElementById("rateStepInput").value =
-        defaultExtensionSettings.rateStep;
-    }
-
-    // Function to set a keybind by detecting the next key press
-    function setKeybind(inputId) {
-      // Create an overlay to block other interactions and inform the user
-      const overlay = document.createElement("div");
-      overlay.textContent = "Press any key to set the new shortcut";
-      Object.assign(overlay.style, STYLES.bpscConfigOverlay);
-      document.body.appendChild(overlay);
-
-      // Listen for the next keydown event
-      const keydownListener = (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-
-        // Set the key code in the corresponding input field
-        const keyPressed = event.code;
-        document.getElementById(inputId).value = keyPressed;
-
-        // Clean up
-        overlay.remove();
-        document.removeEventListener("keydown", keydownListener);
-      };
-
-      // Attach the keydown listener
-      document.addEventListener("keydown", keydownListener, { once: true });
-    }
+    getOverlayRoot().appendChild(modal);
   };
 
-  // Register the menu command for configuration
-  if (typeof GM_registerMenuCommand !== "undefined") {
+  // ---------------------------------------------------------------------------
+  // Startup
+  // ---------------------------------------------------------------------------
+
+  if (typeof GM_registerMenuCommand === "function") {
     GM_registerMenuCommand("Settings", createConfigMenu);
   }
 
-  // MutationObserver to monitor DOM for video element or URL changes
-  const observer = new MutationObserver(checkVideoExists);
+  // YouTube is a single-page app, so watch for new videos and navigation
+  const observer = new MutationObserver(scheduleCheck);
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Listen for changes in the URL (which might happen without a page reload)
-  window.addEventListener("yt-navigate-finish", checkVideoExists);
-  window.addEventListener("popstate", checkVideoExists); // Handle back/forward navigation
+  window.addEventListener("yt-navigate-finish", scheduleCheck);
+  window.addEventListener("popstate", scheduleCheck);
 
-  // Initial check when the script runs
   checkVideoExists();
-  // Add event listener for keydown events
   window.addEventListener("keydown", handleKeydown);
 
-  // Add event listener so the playback rate doesn't reset
+  // Track rate changes made outside this script (e.g. YouTube's speed menu)
   document.addEventListener(
     "ratechange",
-    (e) =>
-      e.target.tagName === "VIDEO" &&
-      (currentPlaybackRate = e.target.playbackRate),
+    (event) => {
+      if (!(event.target instanceof HTMLVideoElement)) return;
+
+      const rate = event.target.playbackRate;
+
+      // Undo a reset by YouTube right after a video change when keep-speed is on
+      if (keepRateTarget !== null && Date.now() < keepRateUntil) {
+        if (Math.abs(rate - keepRateTarget) > 0.001) {
+          setPlaybackRate(keepRateTarget);
+          return;
+        }
+      } else {
+        keepRateTarget = null;
+      }
+
+      currentPlaybackRate = rate;
+      if (rate !== PLAYBACK_RATE_DEFAULT) lastCustomRate = rate;
+    },
     true,
   );
 })();
